@@ -1,0 +1,287 @@
+		*Cascading Updates*
+
+use boy
+  create trigger trg_Update_Department
+  on Department
+  after Update
+  as 
+  begin
+  if Update(DepartmentName)
+  begin
+  Update e
+  set e.DepartmentName = d.DepartmentName
+  from employeed e
+  inner join inserted d on e.EmployeeID = D.DepartmentID
+  end
+  end;
+  
+  Update Department
+  Set DepartmentName = 'software'
+  where DepartmentID = 4;
+  
+  select * from Department
+
+		*Data Validation*
+
+ use boy
+  CREATE TRIGGER trg_PreventPriceDecrease
+ON Product
+instead of  UPDATE
+AS
+BEGIN
+        IF EXISTS (
+            SELECT 1
+            FROM Product p
+            JOIN inserted i on p.ProductID = i.ProductID
+            WHERE i.Price < p.Price
+        )
+        BEGIN
+            RAISERROR (' Error: product price cannot be decreased.', 16, 1)
+            ROLLBACK TRANSACTION
+        END
+   else
+   begin
+   Update Product
+   set Price = i.Price
+   from Product p
+   join inserted i on p.ProductID = i.ProductID
+   end
+   end;
+
+Update Product set Price = 54000 where Product
+ID = 1;
+
+select * from Product
+
+	*Trigger for Complex Calculations*
+
+use boy
+CREATE TABLE Invoice (
+    InvoiceID INT PRIMARY KEY,
+    TotalAmount DECIMAL(18, 2) -- Stores the total amount of the invoice
+);
+ALTER TABLE InvoiceItems
+ADD Quantity INT;
+-- Create the InvoiceItems table
+CREATE TABLE InvoiceItems (
+    InvoiceItemID INT PRIMARY KEY,
+    InvoiceID INT FOREIGN KEY REFERENCES Invoice(InvoiceID),
+    ItemAmount DECIMAL(18, 2) -- Amount of the individual item
+);
+
+IF OBJECT_ID('trg_UpdateInvoiceTotal2', 'TR') IS NOT NULL
+    DROP TRIGGER trg_UpdateInvoiceTotal2;
+GO
+
+-- Create or recreate the trigger
+CREATE TRIGGER trg_UpdateInvoiceTotal2
+ON InvoiceItems
+AFTER INSERT, UPDATE, DELETE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Update TotalAmount in the Invoice table
+    UPDATE I
+    SET I.TotalAmount = (
+        SELECT ISNULL(SUM(II.ItemAmount * II.Quantity), 0)
+        FROM InvoiceItems II
+        WHERE II.InvoiceID = I.InvoiceID
+    )
+    FROM Invoice I
+    INNER JOIN (
+        SELECT DISTINCT InvoiceID
+        FROM Inserted
+        UNION
+        SELECT DISTINCT InvoiceID
+        FROM Deleted
+    ) AS ChangedInvoices ON I.InvoiceID = ChangedInvoices.InvoiceID;
+END;
+GO
+
+
+
+
+-- Insert a new invoice
+INSERT INTO Invoice (InvoiceID, TotalAmount) 
+VALUES (1, 100);
+
+-- Insert a new invoice item with quantity
+INSERT INTO InvoiceItems (InvoiceItemID, InvoiceID, ItemAmount, Quantity) 
+VALUES (1, 1, 300, 2); -- Quantity = 1, so TotalAmount = 200
+
+-- Update the invoice item
+UPDATE InvoiceItems 
+SET ItemAmount = 3000, Quantity = 2  -- New total amount = 3000 * 2 = 6000
+WHERE InvoiceItemID = 1;
+
+-- Check the updated total amount in the Invoice table
+SELECT * FROM Invoice;
+
+-- Check the InvoiceItems table
+SELECT * FROM InvoiceItems;
+
+-- Delete the invoice item
+DELETE FROM InvoiceItems 
+WHERE InvoiceItemID = 1;
+
+DELETE FROM Invoice 
+WHERE InvoiceID = 3;
+
+-- Check the total amount in the Invoice table after deletion
+SELECT * FROM Invoice;
+
+		*Recursive Trigger*
+
+SELECT TOP 1000 [EmployeeID]
+      ,[Name]
+      ,[ManagerID]
+  FROM [boy].[dbo].[Employees1];
+
+CREATE TABLE Employees1 (
+    EmployeeID INT PRIMARY KEY,
+    Name VARCHAR(100),
+    ManagerID INT,
+    FOREIGN KEY (ManagerID) REFERENCES Employees1(EmployeeID)
+);
+CREATE TRIGGER tr_UpdateSubordinatesManager
+ON Employees1
+AFTER UPDATE
+AS
+BEGIN
+    -- Check if ManagerID has been changed
+    IF UPDATE(ManagerID)
+    BEGIN
+        -- Update ManagerID for all subordinates
+        UPDATE e
+        SET e.ManagerID = i.ManagerID
+        FROM Employees1 e
+        INNER JOIN INSERTED i ON e.ManagerID = i.EmployeeID
+        INNER JOIN DELETED d ON i.EmployeeID = d.EmployeeID
+        WHERE d.ManagerID != i.ManagerID;
+    END
+END;
+
+INSERT INTO Employees1 (EmployeeID, Name, ManagerID)
+VALUES (1, 'khizar', NULL),   -- CEO, no manager
+       (2, 'zaid', 1),      -- Manager
+       (3, 'Muntajib', 2),-- Subordinate
+       (4, 'Laeeque', 2);     -- Subordinate
+
+update Employees1 set ManagerID=1 where Name='khizar'
+
+		*Instead of Trigger*
+
+use boy
+-- Create the Orderss table
+CREATE TABLE Orderss (
+    OrderID INT PRIMARY KEY,
+    OrderDate DATE,
+    CustomerID INT
+);
+
+-- Create the OrderDetails table
+CREATE TABLE OrderDetails (
+    OrderDetailID INT PRIMARY KEY,
+    OrderID INT FOREIGN KEY REFERENCES Orderss(OrderID),
+    ProductID INT,
+    Quantity INT,
+    UnitPrice DECIMAL(18, 2)
+);
+
+
+-- Create a view that joins Orderss and OrderDetails
+CREATE VIEW vw_OrderDetails
+AS
+SELECT 
+    O.OrderID,
+    O.OrderDate,
+    O.CustomerID,
+    OD.OrderDetailID,
+    OD.ProductID,
+    OD.Quantity,
+    OD.UnitPrice
+FROM Orderss O
+INNER JOIN OrderDetails OD ON O.OrderID = OD.OrderID;
+
+
+-- Create an INSTEAD OF DELETE trigger on the vw_OrderDetails view
+CREATE TRIGGER trg_DeleteOrderDetails
+ON vw_OrderDetails
+INSTEAD OF DELETE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Delete corresponding records from OrderDetails
+    DELETE FROM OrderDetails
+    WHERE OrderDetailID IN (SELECT D.OrderDetailID FROM Deleted D);
+
+    -- Delete corresponding records from Orders
+    DELETE FROM Orderss
+    WHERE OrderID IN (SELECT DISTINCT D.OrderID FROM Deleted D);
+END;
+GO
+
+
+
+-- Insert sample data into Orders
+INSERT INTO Orderss (OrderID, OrderDate, CustomerID) 
+VALUES (1, '2024-08-30', 100),
+       (2, '2024-08-31', 101);
+
+-- Insert sample data into OrderDetails
+INSERT INTO OrderDetails (OrderDetailID, OrderID, ProductID, Quantity, UnitPrice)
+VALUES (1, 1, 200, 2, 50.00),
+       (2, 1, 201, 1, 75.00),
+       (3, 2, 200, 1, 50.00);
+       
+       
+DELETE FROM vw_OrderDetails WHERE OrderID = 1;
+       
+       -- Check the Orders table to ensure the correct rows were deleted
+SELECT * FROM Orderss;
+
+-- Check the OrderDetails table to ensure the correct rows were deleted
+SELECT * FROM OrderDetails;
+
+
+
+		*Handling Complex Transactions*
+
+SELECT TOP 1000 [EmployeeID]
+      ,[Name]
+      ,[ManagerID]
+  FROM [boy].[dbo].[Employees1];
+
+CREATE TABLE Employees1 (
+    EmployeeID INT PRIMARY KEY,
+    Name VARCHAR(100),
+    ManagerID INT,
+    FOREIGN KEY (ManagerID) REFERENCES Employees1(EmployeeID)
+);
+CREATE TRIGGER tr_UpdateSubordinatesManager
+ON Employees1
+AFTER UPDATE
+AS
+BEGIN
+    -- Check if ManagerID has been changed
+    IF UPDATE(ManagerID)
+    BEGIN
+        -- Update ManagerID for all subordinates
+        UPDATE e
+        SET e.ManagerID = i.ManagerID
+        FROM Employees1 e
+        INNER JOIN INSERTED i ON e.ManagerID = i.EmployeeID
+        INNER JOIN DELETED d ON i.EmployeeID = d.EmployeeID
+        WHERE d.ManagerID != i.ManagerID;
+    END
+END;
+
+INSERT INTO Employees1 (EmployeeID, Name, ManagerID)
+VALUES (1, 'khizar', NULL),   -- CEO, no manager
+       (2, 'zaid', 1),      -- Manager
+       (3, 'Muntajib', 2),-- Subordinate
+       (4, 'Laeeque', 2);     -- Subordinate
+
+update Employees1 set ManagerID=1 where Name='khizar'
